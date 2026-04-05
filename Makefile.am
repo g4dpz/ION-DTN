@@ -779,7 +779,9 @@ ltpbin = \
 	ltpwatch \
 	sdatest \
 	udplsi \
-	udplso
+	udplso \
+	ltpkisslsi \
+	ltpkisslso
 
 ltplib = \
 	libltp.la \
@@ -794,7 +796,8 @@ ltpnoinst = \
 	ltp/dccp/dccplsa.h \
 	ltp/library/ltpP.h \
 	ltp/library/ltpsec.h \
-	ltp/udp/udplsa.h
+	ltp/udp/udplsa.h \
+	ltp/kiss/ltpkisslsa.h
 
 ltpextra = \
 	ltp/README.txt \
@@ -914,6 +917,16 @@ udplsi_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
 udplso_SOURCES = ltp/udp/udplso.c
 udplso_LDADD = libltp.la libudplsa.la libici.la $(PTHREAD_LIBS)
 udplso_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
+
+# --- KISS Executables --- #
+
+ltpkisslsi_SOURCES = ltp/kiss/ltpkisslsi.c ltp/kiss/kiss.c ltp/kiss/ax25frame.c ltp/kiss/serial.c ltp/kiss/kissconfig.c
+ltpkisslsi_LDADD = libltp.la libici.la $(PTHREAD_LIBS)
+ltpkisslsi_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
+
+ltpkisslso_SOURCES = ltp/kiss/ltpkisslso.c ltp/kiss/kiss.c ltp/kiss/ax25frame.c ltp/kiss/serial.c ltp/kiss/kissconfig.c
+ltpkisslso_LDADD = libltp.la libici.la $(PTHREAD_LIBS)
+ltpkisslso_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
 
 # --- AOS Executables --- #
 
