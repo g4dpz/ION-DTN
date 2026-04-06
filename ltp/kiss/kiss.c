@@ -1,180 +1,233 @@
 /*
-	kiss.c:		KISS protocol framing and unframing.
-
-			Wraps data in KISS frames for transmission
-			to a TNC, and extracts data from received
-			KISS frames.
-
-	Author: David Johnson
-
-	Copyright (c) 2025, All rights reserved.
-									*/
-
-#include "ltpkisslsa.h"
-
-/*	kissFrame: wrap data in a KISS frame.
+ *	kiss.c:		KISS protocol implementation for LTP CLA.
  *
- *	Format: FEND + CMD_DATA + escaped_data + FEND
+ *	Copyright (c) 2024, California Institute of Technology.
+ *	ALL RIGHTS RESERVED.  U.S. Government Sponsorship acknowledged.
  *
- *	Any FEND (0xC0) in the data is replaced with FESC TFEND.
- *	Any FESC (0xDB) in the data is replaced with FESC TFESC.
- *
- *	Returns the length of the framed output, or -1 on error.	*/
+ *	Author: ION Development Team
+ */
 
-int	kissFrame(unsigned char *in, int inLen,
-		unsigned char *out, int outMax)
+#include "ltpkissP.h"
+#include <string.h>
+#include <time.h>
+
+/*	KISS Framing Functions						*/
+
+int	kissFrame(unsigned char *input, int inputLen,
+		unsigned char *output, int *outputLen)
 {
-	int	outIdx = 0;
 	int	i;
+	int	j = 0;
 
-	if (in == NULL || out == NULL || inLen < 0)
+	/*	Validate parameters					*/
+	if (input == NULL || output == NULL || outputLen == NULL)
 	{
+		putErrmsg("Invalid parameters to kissFrame.", NULL);
 		return -1;
 	}
 
-	/*	Worst case: every byte escapes (2x) + FEND+CMD+FEND.	*/
-
-	if (outMax < (inLen * 2) + 3)
+	if (inputLen < 0 || inputLen > MAX_KISS_FRAME_SIZE)
 	{
+		putErrmsg("Invalid input length for kissFrame.", itoa(inputLen));
 		return -1;
 	}
 
-	/*	Opening FEND.						*/
-
-	out[outIdx++] = KISS_FEND;
-
-	/*	Command byte: data frame on port 0.			*/
-
-	out[outIdx++] = KISS_CMD_DATA;
-
-	/*	Escape and copy data.					*/
-
-	for (i = 0; i < inLen; i++)
+	/*	Check output buffer size (worst case: all bytes escaped)*/
+	if (j + 4 + (inputLen * 2) > KISS_FRAME_BUFFER_SIZE)
 	{
-		if (in[i] == KISS_FEND)
+		putErrmsg("Output buffer too small for kissFrame.", NULL);
+		return -1;
+	}
+
+	/*	Start frame with FEND					*/
+	output[j++] = KISS_FEND;
+
+	/*	Add command byte (data frame, port 0)			*/
+	output[j++] = KISS_CMD_DATA;
+
+	/*	Escape and copy data					*/
+	for (i = 0; i < inputLen; i++)
+	{
+		if (input[i] == KISS_FEND)
 		{
-			out[outIdx++] = KISS_FESC;
-			out[outIdx++] = KISS_TFEND;
+			output[j++] = KISS_FESC;
+			output[j++] = KISS_TFEND;
 		}
-		else if (in[i] == KISS_FESC)
+		else if (input[i] == KISS_FESC)
 		{
-			out[outIdx++] = KISS_FESC;
-			out[outIdx++] = KISS_TFESC;
+			output[j++] = KISS_FESC;
+			output[j++] = KISS_TFESC;
 		}
 		else
 		{
-			out[outIdx++] = in[i];
+			output[j++] = input[i];
 		}
 	}
 
-	/*	Closing FEND.						*/
+	/*	End frame with FEND					*/
+	output[j++] = KISS_FEND;
 
-	out[outIdx++] = KISS_FEND;
-
-	return outIdx;
+	*outputLen = j;
+	return 0;
 }
 
-/*	kissUnframe: extract data from a KISS frame.
- *
- *	Strips FEND delimiters and command byte, unescapes
- *	FESC sequences.
- *
- *	Returns the length of the extracted data, or -1 on error.	*/
-
-int	kissUnframe(unsigned char *in, int inLen,
-		unsigned char *out, int outMax)
+int	kissUnframe(unsigned char *input, int inputLen,
+		unsigned char *output, int *outputLen,
+		int *frameComplete)
 {
-	int	outIdx = 0;
-	int	i;
-	int	dataStart;
-	int	dataEnd;
-	int	inEscape;
+	KissUnframer	unframer;
 
-	if (in == NULL || out == NULL || inLen < 3)
+	/*	Simple wrapper for stateless operation.			*/
+
+	initKissUnframer(&unframer);
+	return kissUnframeStateful(&unframer, input, inputLen,
+			output, outputLen, frameComplete);
+}
+
+int	kissUnframeStateful(KissUnframer *unframer, unsigned char *input,
+		int inputLen, unsigned char *output, int *outputLen,
+		int *frameComplete)
+{
+	int		i;
+
+	/*	Validate parameters					*/
+
+	if (unframer == NULL || input == NULL || output == NULL
+		|| outputLen == NULL || frameComplete == NULL)
 	{
+		putErrmsg("Invalid parameters to kissUnframeStateful.", NULL);
 		return -1;
 	}
 
-	/*	Find the first FEND.					*/
-
-	dataStart = -1;
-	for (i = 0; i < inLen; i++)
+	if (inputLen < 0)
 	{
-		if (in[i] == KISS_FEND)
-		{
-			dataStart = i + 1;
-			break;
-		}
-	}
-
-	if (dataStart < 0 || dataStart >= inLen)
-	{
+		putErrmsg("Invalid input length for kissUnframeStateful.",
+				itoa(inputLen));
 		return -1;
 	}
 
-	/*	Skip the command byte.					*/
+	/*	Process input bytes					*/
 
-	dataStart++;
-	if (dataStart >= inLen)
+	for (i = 0; i < inputLen; i++)
 	{
-		return -1;
-	}
-
-	/*	Find the closing FEND.					*/
-
-	dataEnd = -1;
-	for (i = dataStart; i < inLen; i++)
-	{
-		if (in[i] == KISS_FEND)
+		if (input[i] == KISS_FEND)
 		{
-			dataEnd = i;
-			break;
-		}
-	}
+			/*	Frame delimiter detected		*/
 
-	if (dataEnd < 0)
-	{
-		return -1;
-	}
-
-	/*	Unescape the data.					*/
-
-	inEscape = 0;
-	for (i = dataStart; i < dataEnd; i++)
-	{
-		if (outIdx >= outMax)
-		{
-			return -1;
-		}
-
-		if (inEscape)
-		{
-			if (in[i] == KISS_TFEND)
+			if (unframer->inFrame && unframer->bufferLen > 1)
 			{
-				out[outIdx++] = KISS_FEND;
+				/*	Complete frame received.
+				 *	Skip command byte (first byte).	*/
+
+				if (unframer->bufferLen - 1 > MAX_KISS_FRAME_SIZE)
+				{
+					putErrmsg("Frame too large in kissUnframe.",
+						itoa(unframer->bufferLen - 1));
+					resetKissUnframer(unframer);
+					continue;
+				}
+
+				memcpy(output, unframer->buffer + 1,
+					unframer->bufferLen - 1);
+				*outputLen = unframer->bufferLen - 1;
+				*frameComplete = 1;
+				
+				/*	Reset for next frame.		*/
+
+				unframer->inFrame = 0;
+				unframer->bufferLen = 0;
+				unframer->escaped = 0;
+				return 0;
 			}
-			else if (in[i] == KISS_TFESC)
+
+			/*	Start new frame				*/
+
+			unframer->inFrame = 1;
+			unframer->bufferLen = 0;
+			unframer->escaped = 0;
+			unframer->frameStartTime = time(NULL);
+		}
+		else if (unframer->inFrame)
+		{
+			/*	Processing frame data			*/
+
+			if (unframer->escaped)
 			{
-				out[outIdx++] = KISS_FESC;
+				/*	Handle escaped character	*/
+
+				if (input[i] == KISS_TFEND)
+				{
+					unframer->buffer[unframer->bufferLen++]
+						= KISS_FEND;
+				}
+				else if (input[i] == KISS_TFESC)
+				{
+					unframer->buffer[unframer->bufferLen++]
+						= KISS_FESC;
+				}
+				else
+				{
+					/*	Invalid escape sequence	*/
+
+					writeMemo("[?] Invalid KISS escape \
+sequence.");
+					resetKissUnframer(unframer);
+					continue;
+				}
+
+				unframer->escaped = 0;
+			}
+			else if (input[i] == KISS_FESC)
+			{
+				/*	Escape character detected	*/
+
+				unframer->escaped = 1;
 			}
 			else
 			{
-				/*	Invalid escape; pass through.	*/
+				/*	Normal data byte		*/
 
-				out[outIdx++] = in[i];
+				if (unframer->bufferLen >= KISS_FRAME_BUFFER_SIZE)
+				{
+					putErrmsg("Frame buffer overflow in \
+kissUnframe.", NULL);
+					resetKissUnframer(unframer);
+					continue;
+				}
+
+				unframer->buffer[unframer->bufferLen++] = input[i];
 			}
-
-			inEscape = 0;
-		}
-		else if (in[i] == KISS_FESC)
-		{
-			inEscape = 1;
-		}
-		else
-		{
-			out[outIdx++] = in[i];
 		}
 	}
 
-	return outIdx;
+	/*	No complete frame yet					*/
+	*frameComplete = 0;
+	return 0;
+}
+
+void	initKissUnframer(KissUnframer *unframer)
+{
+	if (unframer == NULL)
+	{
+		return;
+	}
+
+	memset(unframer->buffer, 0, KISS_FRAME_BUFFER_SIZE);
+	unframer->bufferLen = 0;
+	unframer->inFrame = 0;
+	unframer->escaped = 0;
+	unframer->frameStartTime = 0;
+}
+
+void	resetKissUnframer(KissUnframer *unframer)
+{
+	if (unframer == NULL)
+	{
+		return;
+	}
+
+	unframer->bufferLen = 0;
+	unframer->inFrame = 0;
+	unframer->escaped = 0;
+	unframer->frameStartTime = 0;
 }

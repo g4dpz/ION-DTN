@@ -780,8 +780,8 @@ ltpbin = \
 	sdatest \
 	udplsi \
 	udplso \
-	ltpkisslsi \
-	ltpkisslso
+	ltpkisscli \
+	ltpkissclo
 
 ltplib = \
 	libltp.la \
@@ -797,7 +797,8 @@ ltpnoinst = \
 	ltp/library/ltpP.h \
 	ltp/library/ltpsec.h \
 	ltp/udp/udplsa.h \
-	ltp/kiss/ltpkisslsa.h
+	ltp/kiss/ltpkiss.h \
+	ltp/kiss/ltpkissP.h
 
 ltpextra = \
 	ltp/README.txt \
@@ -920,13 +921,13 @@ udplso_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
 
 # --- KISS Executables --- #
 
-ltpkisslsi_SOURCES = ltp/kiss/ltpkisslsi.c ltp/kiss/kiss.c ltp/kiss/ax25frame.c ltp/kiss/serial.c ltp/kiss/kissconfig.c
-ltpkisslsi_LDADD = libltp.la libici.la $(PTHREAD_LIBS)
-ltpkisslsi_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
+ltpkisscli_SOURCES = ltp/kiss/ltpkisscli.c ltp/kiss/kiss.c ltp/kiss/ax25frame.c ltp/kiss/serial.c ltp/kiss/kissconfig.c
+ltpkisscli_LDADD = libltp.la libici.la $(PTHREAD_LIBS)
+ltpkisscli_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
 
-ltpkisslso_SOURCES = ltp/kiss/ltpkisslso.c ltp/kiss/kiss.c ltp/kiss/ax25frame.c ltp/kiss/serial.c ltp/kiss/kissconfig.c
-ltpkisslso_LDADD = libltp.la libici.la $(PTHREAD_LIBS)
-ltpkisslso_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
+ltpkissclo_SOURCES = ltp/kiss/ltpkissclo.c ltp/kiss/kiss.c ltp/kiss/ax25frame.c ltp/kiss/serial.c ltp/kiss/kissconfig.c
+ltpkissclo_LDADD = libltp.la libici.la $(PTHREAD_LIBS)
+ltpkissclo_CFLAGS = $(ltpcflags) $(AM_CFLAGS)
 
 # --- AOS Executables --- #
 

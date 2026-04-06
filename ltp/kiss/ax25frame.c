@@ -1,42 +1,28 @@
 /*
-	ax25frame.c:	AX.25 UI frame construction and parsing.
-
-			Builds AX.25 Unnumbered Information (UI)
-			frames with amateur radio callsigns for
-			wrapping LTP segments.  Also strips AX.25
-			headers from received frames.
-
-	Author: David Johnson
-
-	Copyright (c) 2025, All rights reserved.
-
-	AX.25 UI frame format (16 bytes header):
-	  Destination address:  7 bytes (6 callsign + 1 SSID)
-	  Source address:       7 bytes (6 callsign + 1 SSID)
-	  Control:              1 byte  (0x03 = UI)
-	  PID:                  1 byte  (0xF0 = no layer 3)
-	  Payload:              variable
-
-	Callsign encoding:
-	  - 6 characters, space-padded on the right
-	  - Each byte is the ASCII value left-shifted by 1 bit
-	  - SSID byte: 0b0SSSSS0 with extension bit set on
-	    last address field (source)
-									*/
-
-#include "ltpkisslsa.h"
-
-/*	encodeCallsign: encode a callsign into AX.25 address format.
+ *	ax25frame.c:	AX.25 UI frame construction and parsing for
+ *			the LTP KISS CLA. Wraps LTP segments in AX.25
+ *			frames with amateur radio callsign addressing.
  *
- *	Writes 7 bytes to 'out': 6 shifted callsign bytes + SSID byte.
- *	The 'last' flag sets the extension bit on the SSID byte to
- *	indicate this is the last address field.			*/
+ *	Copyright (c) 2024, California Institute of Technology.
+ *	ALL RIGHTS RESERVED.  U.S. Government Sponsorship acknowledged.
+ *
+ *	Author: ION Development Team / Cislunar Amateur DTN Project
+ */
 
-static void	encodeCallsign(const char *callsign, int ssid,
-			int last, unsigned char *out)
+#include "ltpkiss.h"
+#include <string.h>
+#include <ctype.h>
+
+/*	Encode a callsign into a 7-byte AX.25 address field.
+ *	Callsign is space-padded to 6 chars, each byte left-shifted by 1.
+ *	SSID byte: 0b011SSSS0 with extension bit set if lastAddr.	*/
+
+static void	encodeAddress(const char *callsign, int ssid, int lastAddr,
+			unsigned char *out)
 {
 	int	i;
 	int	len;
+	unsigned char	ssidByte;
 
 	len = strlen(callsign);
 	if (len > AX25_CALLSIGN_LEN)
@@ -44,107 +30,141 @@ static void	encodeCallsign(const char *callsign, int ssid,
 		len = AX25_CALLSIGN_LEN;
 	}
 
-	/*	Encode callsign characters, shifted left by 1.		*/
+	/*	Encode callsign characters, left-shifted by 1.		*/
+
+	for (i = 0; i < len; i++)
+	{
+		out[i] = (unsigned char)(toupper(callsign[i])) << 1;
+	}
+
+	/*	Pad remaining positions with space << 1.		*/
+
+	for (i = len; i < AX25_CALLSIGN_LEN; i++)
+	{
+		out[i] = ' ' << 1;
+	}
+
+	/*	SSID byte: bits 6,5 = 1,1 (reserved), bits 4-1 = SSID,
+	 *	bit 0 = extension bit (1 if last address field).	*/
+
+	ssidByte = 0x60 | ((ssid & 0x0F) << 1);
+	if (lastAddr)
+	{
+		ssidByte |= 0x01;
+	}
+
+	out[AX25_CALLSIGN_LEN] = ssidByte;
+}
+
+/*	Decode a 7-byte AX.25 address field into callsign and SSID.	*/
+
+static void	decodeAddress(const unsigned char *addr, char *callsign,
+			int *ssid)
+{
+	int	i;
+	int	len;
+
+	/*	Right-shift each byte by 1 to recover ASCII.		*/
 
 	for (i = 0; i < AX25_CALLSIGN_LEN; i++)
 	{
-		if (i < len)
-		{
-			out[i] = (unsigned char)(callsign[i]) << 1;
-		}
-		else
-		{
-			out[i] = ' ' << 1;	/*	Space-pad.	*/
-		}
+		callsign[i] = addr[i] >> 1;
 	}
 
-	/*	SSID byte: 0b011SSSS0
-	 *	Bits 7-6: reserved (0b01 per AX.25 2.2)
-	 *	Bit 5: command/response (set to 1)
-	 *	Bits 4-1: SSID (0-15)
-	 *	Bit 0: extension bit (1 if last address field)		*/
+	callsign[AX25_CALLSIGN_LEN] = '\0';
 
-	out[AX25_CALLSIGN_LEN] = (unsigned char)(0x60
-			| ((ssid & 0x0F) << 1)
-			| (last ? 0x01 : 0x00));
+	/*	Trim trailing spaces.					*/
+
+	len = AX25_CALLSIGN_LEN;
+	while (len > 0 && callsign[len - 1] == ' ')
+	{
+		callsign[--len] = '\0';
+	}
+
+	/*	Extract SSID from bits 4-1 of the SSID byte.		*/
+
+	*ssid = (addr[AX25_CALLSIGN_LEN] >> 1) & 0x0F;
 }
 
-/*	ax25BuildUIFrame: build an AX.25 UI frame.
- *
- *	Constructs a 16-byte AX.25 header (destination address,
- *	source address, control byte, PID byte) followed by the
- *	payload (LTP segment).
- *
- *	Returns total frame length, or -1 on error.			*/
-
-int	ax25BuildUIFrame(KissConfig *config,
-		unsigned char *payload, int payloadLen,
-		unsigned char *out, int outMax)
+int	ax25BuildUIFrame(const KissConfig *config,
+		const unsigned char *payload, int payloadLen,
+		unsigned char *output, int *outputLen)
 {
 	int	totalLen;
 
-	if (config == NULL || payload == NULL || out == NULL)
+	if (config == NULL || payload == NULL || output == NULL
+		|| outputLen == NULL)
 	{
+		putErrmsg("Invalid parameters to ax25BuildUIFrame.", NULL);
+		return -1;
+	}
+
+	if (payloadLen < 0)
+	{
+		putErrmsg("Invalid payload length.", itoa(payloadLen));
 		return -1;
 	}
 
 	totalLen = AX25_HEADER_LEN + payloadLen;
-	if (totalLen > outMax)
+	if (totalLen > MAX_KISS_FRAME_SIZE)
 	{
+		putErrmsg("AX.25 frame too large.", itoa(totalLen));
 		return -1;
 	}
 
-	/*	Destination address (not last).				*/
+	/*	Encode destination address (not last).			*/
 
-	encodeCallsign(config->dstCallsign, config->dstSSID, 0, out);
+	encodeAddress(config->dstCallsign, config->dstSSID, 0, output);
 
-	/*	Source address (last address field).			*/
+	/*	Encode source address (last address field).		*/
 
-	encodeCallsign(config->srcCallsign, config->srcSSID, 1,
-			out + AX25_ADDR_LEN);
+	encodeAddress(config->srcCallsign, config->srcSSID, 1,
+			output + AX25_ADDR_LEN);
 
-	/*	Control field: UI frame.				*/
+	/*	Control field: UI (Unnumbered Information).		*/
 
-	out[AX25_ADDR_LEN * 2] = AX25_CONTROL_UI;
+	output[2 * AX25_ADDR_LEN] = AX25_CONTROL_UI;
 
-	/*	PID field: no layer 3 protocol.				*/
+	/*	PID field: No layer 3 protocol.				*/
 
-	out[AX25_ADDR_LEN * 2 + 1] = AX25_PID_NOLAYER3;
+	output[2 * AX25_ADDR_LEN + 1] = AX25_PID_NOLAYER3;
 
-	/*	Copy payload.						*/
+	/*	Copy payload (LTP segment) into information field.	*/
 
-	memcpy(out + AX25_HEADER_LEN, payload, payloadLen);
+	memcpy(output + AX25_HEADER_LEN, payload, payloadLen);
 
-	return totalLen;
+	*outputLen = totalLen;
+	return 0;
 }
 
-/*	ax25StripHeader: strip the AX.25 header from a received frame.
- *
- *	Sets *payload to point to the first byte after the 16-byte
- *	AX.25 header.
- *
- *	Returns the payload length, or -1 on error.			*/
-
-int	ax25StripHeader(unsigned char *frame, int frameLen,
-		unsigned char **payload)
+int	ax25StripHeader(const unsigned char *frame, int frameLen,
+		const unsigned char **payload, int *payloadLen)
 {
-	if (frame == NULL || payload == NULL)
+	if (frame == NULL || payload == NULL || payloadLen == NULL)
 	{
+		putErrmsg("Invalid parameters to ax25StripHeader.", NULL);
 		return -1;
 	}
 
-	if (frameLen <= AX25_HEADER_LEN)
+	if (frameLen < AX25_HEADER_LEN)
 	{
-		return -1;	/*	No payload.			*/
+		putErrmsg("Frame too short for AX.25 header.",
+				itoa(frameLen));
+		return -1;
 	}
 
-	/*	Verify this looks like a UI frame.			*/
+	/*	Verify control field is UI.				*/
 
-	if (frame[AX25_ADDR_LEN * 2] != AX25_CONTROL_UI)
+	if (frame[2 * AX25_ADDR_LEN] != AX25_CONTROL_UI)
 	{
-		return -1;	/*	Not a UI frame.			*/
+		putErrmsg("Not a UI frame.", NULL);
+		return -1;
 	}
+
+	/*	Point payload past the header.				*/
 
 	*payload = frame + AX25_HEADER_LEN;
-	return frameLen - AX25_HEADER_LEN;
+	*payloadLen = frameLen - AX25_HEADER_LEN;
+
+	return 0;
 }

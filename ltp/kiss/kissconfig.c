@@ -1,140 +1,194 @@
 /*
-	kissconfig.c:	Configuration file parser for KISS CLA.
-
-			Parses kiss.ionconfig to load serial port
-			and AX.25 parameters for a given LTP engine.
-
-	Author: David Johnson
-
-	Copyright (c) 2025, All rights reserved.
-
-	Config file format (one line per remote engine):
-	<engineId> <device> <baudRate> <mtu> <maxRate> <flowControl> [srcCall] [srcSSID] [dstCall] [dstSSID]
-
-	If callsigns are present, AX.25 framing is enabled.
-	Defaults: /dev/ttyUSB0, 9600, 512, 960, 0
-									*/
-
-#include "ltpkisslsa.h"
-
-/*	loadKissConfig: parse kiss.ionconfig for the given engine ID.
+ *	kissconfig.c:	KISS CLA configuration management.
  *
- *	Searches for a line matching the specified remote engine ID
- *	and populates the KissConfig structure.
+ *	Copyright (c) 2024, California Institute of Technology.
+ *	ALL RIGHTS RESERVED.  U.S. Government Sponsorship acknowledged.
  *
- *	Returns 0 on success, -1 on error.				*/
+ *	Author: ION Development Team
+ */
+
+#include "ltpkissP.h"
+#include <string.h>
+
+/*	*	*	Configuration loading	*	*	*	*/
 
 int	loadKissConfig(uvast engineId, KissConfig *config)
 {
-	FILE	*configFile;
-	char	line[1024];
-	uvast	lineEngineId;
-	char	device[256];
-	int	baudRate;
-	int	mtu;
-	int	maxRate;
-	int	flowControl;
-	char	srcCall[16];
-	int	srcSSID;
-	char	dstCall[16];
-	int	dstSSID;
-	int	fieldsRead;
-	int	found;
+	char	engineIdStr[32];
+	char	configLine[512];
+	int	configFile;
+	int	lineLen;
+	char	*token;
+	int	found = 0;
 
-	if (config == NULL)
-	{
-		return -1;
-	}
+	CHKERR(config);
 
-	/*	Set defaults.						*/
+	/*	Set default values.					*/
 
 	memset(config, 0, sizeof(KissConfig));
-	istrcpy(config->devicePath, "/dev/ttyUSB0",
-			sizeof(config->devicePath));
-	config->baudRate = 9600;
-	config->mtu = KISS_DEFAULT_MTU;
-	config->maxRate = 960;
+	config->baudRate = DEFAULT_BAUD_RATE;
+	config->mtu = DEFAULT_MTU;
+	config->maxRate = DEFAULT_MAX_RATE;
 	config->useFlowControl = 0;
-	config->useAX25 = 0;
-	config->srcSSID = 0;
-	config->dstSSID = 0;
+	config->reconnectDelay = 5;
+	config->frameTimeout = 5000;
 
-	/*	Open the config file.					*/
+	/*	Try to load from .ionconfig file.			*/
 
-	configFile = fopen("kiss.ionconfig", "r");
-	if (configFile == NULL)
+	isprintf(engineIdStr, sizeof engineIdStr, UVAST_FIELDSPEC, engineId);
+	configFile = iopen("kiss.ionconfig", O_RDONLY, 0);
+	if (configFile < 0)
 	{
-		putErrmsg("Can't open kiss.ionconfig.", NULL);
-		return -1;
+		/*	No config file, use defaults.			*/
+
+		writeMemo("[i] No kiss.ionconfig found, using defaults.");
+		istrcpy(config->devicePath, "/dev/ttyUSB0",
+				sizeof config->devicePath);
+		return 0;
 	}
 
-	/*	Search for a line matching the engine ID.		*/
+	/*	Parse configuration file.				*/
 
-	found = 0;
-	while (fgets(line, sizeof(line), configFile) != NULL)
+	while (igets(configFile, configLine, sizeof configLine, &lineLen)
+			!= NULL)
 	{
 		/*	Skip comments and blank lines.			*/
 
-		if (line[0] == '#' || line[0] == '\n'
-				|| line[0] == '\r')
+		if (lineLen == 0 || configLine[0] == '#')
 		{
 			continue;
 		}
 
-		/*	Try to parse with callsigns first.		*/
+		/*	Look for: <engineId> <device> <baud> <mtu> <maxRate>	*/
 
-		memset(srcCall, 0, sizeof(srcCall));
-		memset(dstCall, 0, sizeof(dstCall));
-		srcSSID = 0;
-		dstSSID = 0;
-
-		fieldsRead = sscanf(line,
-				UVAST_FIELDSPEC " %255s %d %d %d %d %15s %d %15s %d",
-				&lineEngineId, device, &baudRate,
-				&mtu, &maxRate, &flowControl,
-				srcCall, &srcSSID, dstCall, &dstSSID);
-
-		if (fieldsRead < 6)
+		token = strtok(configLine, " \t\n");
+		if (token == NULL)
 		{
-			continue;	/*	Malformed line.		*/
+			continue;
 		}
 
-		if (lineEngineId != engineId)
+		if (strcmp(token, engineIdStr) != 0)
 		{
-			continue;	/*	Not our engine.		*/
+			continue;	/*	Not for this engine.	*/
 		}
 
-		/*	Found a matching line.				*/
-
-		istrcpy(config->devicePath, device,
-				sizeof(config->devicePath));
-		config->baudRate = baudRate;
-		config->mtu = mtu;
-		config->maxRate = maxRate;
-		config->useFlowControl = flowControl;
-
-		if (fieldsRead >= 10 && strlen(srcCall) > 0
-				&& strlen(dstCall) > 0)
-		{
-			istrcpy(config->srcCallsign, srcCall,
-					sizeof(config->srcCallsign));
-			config->srcSSID = srcSSID;
-			istrcpy(config->dstCallsign, dstCall,
-					sizeof(config->dstCallsign));
-			config->dstSSID = dstSSID;
-			config->useAX25 = 1;
-		}
+		/*	Found configuration for this engine.		*/
 
 		found = 1;
+
+		/*	Parse device path.				*/
+
+		token = strtok(NULL, " \t\n");
+		if (token == NULL)
+		{
+			putErrmsg("Missing device path in config.", NULL);
+			close(configFile);
+			return -1;
+		}
+
+		istrcpy(config->devicePath, token, sizeof config->devicePath);
+
+		/*	Parse baud rate (optional).			*/
+
+		token = strtok(NULL, " \t\n");
+		if (token != NULL)
+		{
+			config->baudRate = atoi(token);
+		}
+
+		/*	Parse MTU (optional).				*/
+
+		token = strtok(NULL, " \t\n");
+		if (token != NULL)
+		{
+			config->mtu = atoi(token);
+		}
+
+		/*	Parse max rate (optional).			*/
+
+		token = strtok(NULL, " \t\n");
+		if (token != NULL)
+		{
+			config->maxRate = atoi(token);
+		}
+
+		/*	Parse flow control flag (optional).		*/
+
+		token = strtok(NULL, " \t\n");
+		if (token != NULL)
+		{
+			config->useFlowControl = atoi(token);
+		}
+
+		/*	Parse source callsign (optional).		*/
+
+		token = strtok(NULL, " \t\n");
+		if (token != NULL)
+		{
+			istrcpy(config->srcCallsign, token,
+					sizeof config->srcCallsign);
+			config->useAX25 = 1;
+
+			/*	Parse source SSID (optional).		*/
+
+			token = strtok(NULL, " \t\n");
+			if (token != NULL)
+			{
+				config->srcSSID = atoi(token);
+			}
+
+			/*	Parse destination callsign (optional).	*/
+
+			token = strtok(NULL, " \t\n");
+			if (token != NULL)
+			{
+				istrcpy(config->dstCallsign, token,
+					sizeof config->dstCallsign);
+
+				/*	Parse dest SSID (optional).	*/
+
+				token = strtok(NULL, " \t\n");
+				if (token != NULL)
+				{
+					config->dstSSID = atoi(token);
+				}
+			}
+		}
+
 		break;
 	}
 
-	fclose(configFile);
+	close(configFile);
 
 	if (!found)
 	{
-		putErrmsg("No kiss.ionconfig entry for engine.",
-				itoa(engineId));
+		putErrmsg("No KISS config found for engine.", engineIdStr);
+		return -1;
+	}
+
+	/*	Validate configuration.					*/
+
+	if (config->devicePath[0] == '\0')
+	{
+		putErrmsg("Device path is empty.", NULL);
+		return -1;
+	}
+
+	if (config->baudRate <= 0)
+	{
+		putErrmsg("Invalid baud rate.", itoa(config->baudRate));
+		return -1;
+	}
+
+	if (config->mtu <= 0 || config->mtu > MAX_KISS_FRAME_SIZE)
+	{
+		putErrmsg("Invalid MTU.", itoa(config->mtu));
+		return -1;
+	}
+
+	if (config->maxRate <= 0)
+	{
+		putErrmsg("Invalid max rate.", itoa(config->maxRate));
 		return -1;
 	}
 
