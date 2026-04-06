@@ -108,6 +108,8 @@ int	main(int argc, char *argv[])
 
 	/*	Main transmission loop.					*/
 
+	int	burstCounter = 0;
+
 	writeMemo("[i] ltpkissclo is running.");
 	while (running && !(sm_SemEnded(vspan->segSemaphore)))
 	{
@@ -202,6 +204,18 @@ int	main(int argc, char *argv[])
 		/*	Let other tasks run.				*/
 
 		sm_TaskYield();
+
+		/*	Duty-cycle arbitration: after burstSize	*/
+		/*	consecutive sends, pause for listenWindowMs	*/
+		/*	to allow the radio to receive.			*/
+
+		burstCounter++;
+		if (burstCounter >= config.burstSize
+				&& config.listenWindowMs > 0)
+		{
+			microsnooze(config.listenWindowMs * 1000);
+			burstCounter = 0;
+		}
 	}
 
 	/*	Clean shutdown.						*/

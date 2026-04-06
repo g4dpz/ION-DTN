@@ -48,6 +48,8 @@ typedef struct
 	char	dstCallsign[7];		/* Destination callsign		*/
 	int	dstSSID;		/* Destination SSID (0-15)	*/
 	int	useAX25;		/* 1 = wrap in AX.25 UI frames	*/
+	int	burstSize;		/* Max segments per TX burst	*/
+	int	listenWindowMs;		/* RX listen pause in ms	*/
 } KissConfig;
 
 /*	AX.25 Constants							*/

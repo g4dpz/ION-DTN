@@ -32,6 +32,8 @@ int	loadKissConfig(uvast engineId, KissConfig *config)
 	config->useFlowControl = 0;
 	config->reconnectDelay = 5;
 	config->frameTimeout = 5000;
+	config->burstSize = 4;
+	config->listenWindowMs = 500;
 
 	/*	Try to load from .ionconfig file.			*/
 
@@ -155,6 +157,22 @@ int	loadKissConfig(uvast engineId, KissConfig *config)
 			}
 		}
 
+		/*	Parse burst size (optional).			*/
+
+		token = strtok(NULL, " \t\n");
+		if (token != NULL)
+		{
+			config->burstSize = atoi(token);
+
+			/*	Parse listen window ms (optional).	*/
+
+			token = strtok(NULL, " \t\n");
+			if (token != NULL)
+			{
+				config->listenWindowMs = atoi(token);
+			}
+		}
+
 		break;
 	}
 
@@ -189,6 +207,18 @@ int	loadKissConfig(uvast engineId, KissConfig *config)
 	if (config->maxRate <= 0)
 	{
 		putErrmsg("Invalid max rate.", itoa(config->maxRate));
+		return -1;
+	}
+
+	if (config->burstSize < 1)
+	{
+		putErrmsg("Invalid burst size.", itoa(config->burstSize));
+		return -1;
+	}
+
+	if (config->listenWindowMs < 0)
+	{
+		putErrmsg("Invalid listen window.", itoa(config->listenWindowMs));
 		return -1;
 	}
 
